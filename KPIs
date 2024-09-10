@@ -1,0 +1,314 @@
+--WIN rate for teams for ever season
+-- Create a new table to store the results
+CREATE OR REPLACE TABLE WinRateResults AS
+WITH winrate_A AS (
+        SELECT
+        dm_a.match_year AS year,
+        dt_a.team_code AS team,
+        COUNT(*) AS num_matches_played,
+        SUM(CASE WHEN ftm_a.is_winner = 1 THEN 1 ELSE 0 END) AS num_matches_won,
+        (SUM(CASE WHEN ftm_a.is_winner = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*)) AS win_rate_percentage
+    FROM
+        dim_teams dt_a
+    JOIN
+        fact_teama_match ftm_a ON dt_a.team_sk = ftm_a.team_code_sk
+    JOIN
+        dim_matches dm_a ON dm_a.match_key = ftm_a.match_key
+    GROUP BY
+        dm_a.match_year,
+        dt_a.team_code
+),
+winrate_B AS (
+      SELECT
+        dm_b.match_year AS year,
+        dt_b.team_code AS team,
+        COUNT(*) AS num_matches_played,
+        SUM(CASE WHEN ftm_b.is_winner = 0 THEN 1 ELSE 0 END) AS num_matches_won,
+        (SUM(CASE WHEN ftm_b.is_winner = 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*)) AS win_rate_percentage
+    FROM
+        dim_teams dt_b
+    JOIN
+        fact_teamb_match ftm_b ON dt_b.team_sk = ftm_b.team_code_sk
+    JOIN
+        dim_matches dm_b ON dm_b.match_key = ftm_b.match_key
+    GROUP BY
+        dm_b.match_year,
+        dt_b.team_code
+)
+SELECT 
+    A.year,
+    A.team,
+    SUM(A.num_matches_played + B.num_matches_played) AS num_matches_played,
+    SUM(A.num_matches_won + B.num_matches_won) AS num_matches_won,
+    (SUM(A.num_matches_won + B.num_matches_won) * 100.0 / SUM(A.num_matches_played + B.num_matches_played)) AS win_rate_percentage
+FROM 
+    winrate_A A
+JOIN 
+    winrate_B B ON A.year = B.year AND A.team = B.team
+GROUP BY
+    A.year,
+    A.team
+ORDER BY
+    A.year,
+    A.team;
+
+select*from WinRateResults
+WHERE 
+YEAR = 2009;
+
+ 
+
+DROP TABLE WinRateResults
+
+========================================================
+
+--no of tosses won and lost by team per year
+CREATE OR REPLACE TABLE tosses AS
+WITH toss_A AS (
+        SELECT
+        dm_a.match_year AS year,
+        dt_a.team_code AS team,
+        COUNT(*) AS num_matches_played,
+        SUM(CASE WHEN ftm_a.is_toss_winner = 1 THEN 1 ELSE 0 END) AS num_toss_won,
+        SUM(CASE WHEN ftm_a.is_toss_winner = 0 THEN 0 ELSE 1 END) AS num_toss_lost
+    FROM
+        dim_teams dt_a
+    JOIN
+        fact_teama_match ftm_a ON dt_a.team_sk = ftm_a.team_code_sk
+    JOIN
+        dim_matches dm_a ON dm_a.match_key = ftm_a.match_key
+    GROUP BY
+        dm_a.match_year,
+        dt_a.team_code
+),
+toss_B AS (
+      SELECT
+        dm_b.match_year AS year,
+        dt_b.team_code AS team,
+        count(*) AS num_matches_played,
+        SUM(CASE WHEN ftm_b.is_toss_winner = 0 THEN 1 ELSE 0 END) AS num_toss_won,
+        SUM(CASE WHEN ftm_b.is_toss_winner = 0 THEN 0 ELSE 1 END) AS num_toss_lost
+    FROM
+        dim_teams dt_b
+    JOIN
+        fact_teamb_match ftm_b ON dt_b.team_sk = ftm_b.team_code_sk
+    JOIN
+        dim_matches dm_b ON dm_b.match_key = ftm_b.match_key
+    GROUP BY
+        dm_b.match_year,
+        dt_b.team_code
+)
+SELECT 
+    A.year,
+    A.team,
+    SUM(A.num_matches_played + B.num_matches_played) AS num_matches_played,
+    SUM(A.num_toss_won + B.num_toss_won) AS num_toss_won,
+    SUM(A.num_toss_lost + B.num_toss_lost)  AS num_toss_lost
+FROM 
+     toss_A A
+JOIN 
+    toss_B B ON A.year = B.year AND A.team = B.team
+GROUP BY
+    A.year,
+    A.team
+ORDER BY
+    A.year,
+    A.team;
+
+    
+--no of tosses won and lost by team per year
+ SELECT * FROM tosses
+
+=============================================
+
+
+--Table for which is best choice for a team in a year to play bat_first or bowl_first
+CREATE OR REPLACE TABLE bat_firstvsbowl_first AS
+WITH bat_first AS (
+        SELECT
+        dm_a.match_year AS year,
+        dt_a.team_code AS team,
+        COUNT(*) AS num_bat_first,
+        SUM( ftm_a.is_winner ) AS no_of_wins_bat_first
+    FROM
+        dim_teams dt_a
+    JOIN
+        fact_teama_match ftm_a ON dt_a.team_sk = ftm_a.team_code_sk
+    JOIN
+        dim_matches dm_a ON dm_a.match_key = ftm_a.match_key
+    GROUP BY
+        dm_a.match_year,
+        dt_a.team_code
+),
+  bowl_first as (
+      SELECT
+        dm_b.match_year AS year,
+        dt_b.team_code AS team,
+        COUNT(*) AS num_bowl_first,
+        SUM( ftm_b.is_winner ) AS no_of_wins_bowl_first
+    FROM
+        dim_teams dt_b
+    JOIN
+        fact_teamb_match ftm_b ON dt_b.team_sk = ftm_b.team_code_sk
+    JOIN
+        dim_matches dm_b ON dm_b.match_key = ftm_b.match_key
+    GROUP BY
+        dm_b.match_year,
+        dt_b.team_code
+)
+SELECT 
+    A.year,
+    A.team,
+    A.num_bat_first,
+    B.num_bowl_first,
+    A.no_of_wins_bat_first,
+    B.no_of_wins_bowl_first,
+    CASE WHEN    (A.no_of_wins_bat_first*100.0/A.num_bat_first)>(B.no_of_wins_bowl_first*100.0/B.num_bowl_first) THEN 'bat_first'
+         WHEN (A.no_of_wins_bat_first*100.0/A.num_bat_first)<(B.no_of_wins_bowl_first*100.0/B.num_bowl_first) THEN 'bowl_first'
+        ELSE 'equal_choice' 
+    END AS better_choice
+
+FROM 
+     bat_first A
+JOIN 
+     bowl_first B ON A.year = B.year AND A.team = B.team
+
+ ORDER BY
+    A.year,
+    A.team;
+
+    
+--Table for which is best choice for a team in a year to play bat_first or bowl_first
+SELECT * FROM bat_firstvsbowl_first;
+
+==================================================
+
+
+--STRIKE RATE for teams for every year
+CREATE OR REPLACE TABLE strike_rate_year AS
+WITH strike_rate_A AS (
+        SELECT
+        dm.match_year AS year,
+        dt.team_code AS team,
+        SUM(runs_scored) AS total_runs_A,
+        (SUM(overs_played))*6 AS total_balls_A,
+        CASE WHEN (SUM(overs_played))*6 = 0 THEN 0 
+        ELSE (SUM(runs_scored)/(SUM(overs_played))*6)*100 
+        END AS strike_rate_A
+    FROM
+        dim_teams dt
+    JOIN
+        fact_teama_match f_a ON dt.team_sk = f_a.team_code_sk
+    JOIN
+        dim_matches dm ON dm.match_key = f_a.match_key
+    GROUP BY
+        dm.match_year,
+        dt.team_code
+),
+strike_rate_B AS (
+        SELECT
+        dm.match_year AS year,
+        dt.team_code AS team,
+        SUM(runs_scored) AS total_runs_B,
+        (SUM(overs_played))*6 AS total_balls_B,
+        CASE WHEN (SUM(overs_played))*6 = 0 THEN 0 
+        ELSE (SUM(runs_scored)/(SUM(overs_played))*6)*100 
+        END AS strike_rate_B
+    FROM
+        dim_teams dt
+    JOIN
+        fact_teamb_match f_b ON dt.team_sk = f_b.team_code_sk
+    JOIN
+        dim_matches dm ON dm.match_key = f_b.match_key
+    GROUP BY
+        dm.match_year,
+        dt.team_code
+)
+SELECT 
+    A.year,
+    A.team,
+    SUM(A.total_runs_A + B.total_runs_B) AS total_runs,
+    SUM(A.total_balls_A + B.total_balls_B) AS total_balls,
+    CASE WHEN SUM(A.total_balls_A + B.total_balls_B) = 0 THEN 0
+    ELSE (SUM(A.total_runs_A + B.total_runs_B)/SUM(A.total_balls_A + B.total_balls_B))*100 
+    END AS strike_rate
+FROM 
+    strike_rate_A A
+JOIN 
+    strike_rate_B B ON A.year = B.year AND A.team = B.team
+GROUP BY
+    A.year,
+    A.team
+ORDER BY
+    A.year,
+    A.team;
+
+ 
+--STRIKE RATE for teams for every year
+SELECT * FROM strike_rate_year;
+
+ 
+
+============================================= 
+
+--STRIKE RATE for players for every year
+CREATE OR REPLACE TABLE strike_rate_player AS
+        SELECT
+        dm.match_year AS year,
+        dp.player_name AS player,
+        SUM(runs_scored) AS total_runs,
+        SUM(balls_faced) AS total_balls,
+        CASE WHEN SUM(balls_faced) = 0 THEN 0 
+        ELSE (SUM(runs_scored)/SUM(balls_faced))*100 
+        END AS strike_rate
+    FROM
+        dim_players dp
+    JOIN
+        fact_players fp ON dp.player_sk = fp.player_key
+    JOIN
+        dim_matches dm ON dm.match_key = fp.match_key
+    GROUP BY
+        dm.match_year,
+        dp.player_name
+    ORDER BY
+        dm.match_year,
+        dp.player_name
+;
+
+ 
+--STRIKE RATE for players for every year
+SELECT * FROM strike_rate_player;
+
+
+==========================================
+
+
+CREATE OR REPLACE TABLE bowling_rate_player AS
+        SELECT
+        dm.match_year AS year,
+        dp.player_name AS player,
+        SUM(runs_conceded) AS total_runs_conceded,
+        SUM(balls_bowled/6) AS total_overs_bowled,
+        CASE WHEN SUM(balls_bowled/6) = 0 THEN 0 
+        ELSE (SUM(runs_conceded)/SUM(balls_bowled/6))*100 
+        END AS bowling_rate
+    FROM
+        dim_players dp
+    JOIN
+        fact_players fp ON dp.player_sk = fp.player_key
+    JOIN
+        dim_matches dm ON dm.match_key = fp.match_key
+    GROUP BY
+        dm.match_year,
+        dp.player_name
+    ORDER BY
+        dm.match_year,
+        dp.player_name
+;
+
+ 
+--TABLE FOR BOWLING ECONOMY RATE
+SELECT * FROM bowling_rate_player;
+
+
+

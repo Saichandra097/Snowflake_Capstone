@@ -1,0 +1,558 @@
+-- STEP-1: Drop permanent tables for next bulk loading
+CALL create_star_schema_tables();
+
+ 
+truncate table stg_matches;
+truncate table stg_teams;
+truncate table stg_deliveries;
+truncate table stg_batting;
+
+ 
+-- STEP-2: Create Temporary tables for loading external stage data into snowflake's database.
+
+ 
+
+-- Create a temporaray stage for ipl_matches.csv
+CREATE OR REPLACE TEMPORARY TABLE stg_matches (
+    match_key STRING,
+    match_date STRING,
+    ground STRING,
+    team_1 STRING,	
+    team_2 STRING,	
+    winner STRING,	
+    win_mode STRING,
+    margin INTEGER,	
+    toss_winner_code STRING,
+    toss_decision STRING
+);
+
+ 
+
+-- Create a temporaray stage for ipl_teams.csv
+CREATE OR REPLACE TEMPORARY TABLE stg_teams (
+    Team STRING,
+    short_code STRING,
+    City STRING,	
+    Home_ground	STRING,
+    Debut INTEGER,
+    Captain	STRING,
+    Owner STRING,	
+    Dissolved INTEGER
+);
+
+ 
+
+-- Create a temporaray stage for ipl_deliveries.csv
+CREATE OR REPLACE TEMPORARY TABLE stg_deliveries (
+match_key STRING,
+innings_order INTEGER,
+winner STRING,
+playing_batsman_team STRING,
+bowling_over INTEGER,
+delivery DECIMAL,
+batsman STRING,
+bowler STRING,
+non_striker STRING,
+runs_batsman INTEGER,
+runs_extras INTEGER,
+extras_type STRING,
+runs_total INTEGER,
+player_out STRING,
+mode_of_dismissal STRING,
+fielders_involved STRING
+);
+
+ 
+
+-- Create a temporaray stage for ipl_batting.csv
+CREATE OR REPLACE TEMPORARY TABLE stg_batting (
+    match_key STRING,
+    match_date STRING,
+    match_no STRING,
+    team_1 STRING,
+    team_2 STRING,
+    batsmen STRING,
+    wicket_status STRING,
+    R INTEGER,
+    B INTEGER,
+    fours INTEGER,
+    sixes INTEGER,
+    special_role STRING
+);
+
+
+
+
+-- STEP-3: Load data from external stages into temporary tables (EL) ---------------------------
+
+ 
+
+-- extact and load data into stg_matches
+COPY INTO stg_matches
+FROM @nikhil_ext_stg
+FILES = ('ipl_matches.csv');
+
+ 
+
+-- extact and load data into stg_teams
+COPY INTO stg_teams
+FROM @nikhil_ext_stg
+FILES = ('ipl-teams.csv');
+
+ 
+
+-- extact and load data into stg_deliveries
+COPY INTO stg_deliveries
+FROM @nikhil_ext_stg
+FILES = ('ipl_deliveries.csv');
+
+ 
+
+-- extact and load data into stg_batting
+COPY INTO stg_batting
+FROM @nikhil_ext_stg
+FILES = ('ipl_batting.csv');
+
+ 
+===============================
+===============================
+
+
+
+UPDATE stg_matches
+SET team_1 = trim(team_1);
+UPDATE stg_matches
+SET team_2 = trim(team_2);
+UPDATE stg_matches
+SET winner = trim(winner);
+UPDATE stg_matches
+SET toss_winner_code = trim(toss_winner_code);
+
+ 
+
+UPDATE stg_batting
+SET team_1 = trim(team_1);
+UPDATE stg_batting
+SET team_2 = trim(team_2);
+
+ 
+
+UPDATE stg_teams
+SET short_code = trim(short_code);
+
+ 
+
+UPDATE stg_deliveries
+SET winner = trim(winner);
+UPDATE stg_deliveries
+SET playing_batsman_team = trim(playing_batsman_team);
+
+ 
+
+ 
+
+-- STEP-4: Transform using temporary tables and load into dim tables ---------------------------
+
+ 
+
+-- Extract all batsman names
+CREATE OR REPLACE TEMPORARY TABLE batsman1 AS
+SELECT 
+DISTINCT batsman,
+playing_batsman_team,
+CASE WHEN match_date LIKE '%/%'
+THEN YEAR(to_date(match_date, 'DD/MM/YYYY'))
+ELSE YEAR(to_date(match_date, 'DD-MM-YYYY'))END AS year
+FROM
+stg_deliveries d
+JOIN
+stg_matches m
+ON d.match_key = m.match_key;
+
+ 
+
+-- Extract all non-striker names
+CREATE OR REPLACE TEMPORARY TABLE batsman2 AS
+SELECT 
+DISTINCT non_striker,
+playing_batsman_team,
+CASE WHEN match_date LIKE '%/%'
+THEN YEAR(to_date(match_date, 'DD/MM/YYYY'))
+ELSE YEAR(to_date(match_date, 'DD-MM-YYYY'))END AS year
+FROM
+stg_deliveries d
+JOIN
+stg_matches m
+ON d.match_key = m.match_key;
+
+ 
+
+-- Extract all bowler names
+CREATE OR REPLACE TEMPORARY TABLE bowler AS
+SELECT 
+DISTINCT bowler,
+CASE WHEN playing_batsman_team = team_1 THEN team_2
+ELSE team_1 END AS bowl_team,
+CASE WHEN match_date LIKE '%/%'
+THEN YEAR(to_date(match_date, 'DD/MM/YYYY'))
+ELSE YEAR(to_date(match_date, 'DD-MM-YYYY'))END AS year
+FROM
+stg_deliveries d
+JOIN
+stg_matches m
+ON d.match_key = m.match_key;
+
+ 
+
+-- Extract all fielders
+CREATE OR REPLACE TEMPORARY TABLE fielders_list AS
+SELECT 
+DISTINCT fielders_involved,
+CASE WHEN playing_batsman_team = team_1 THEN team_2
+ELSE team_1 END AS bowl_team,
+CASE WHEN match_date LIKE '%/%'
+THEN YEAR(to_date(match_date, 'DD/MM/YYYY'))
+ELSE YEAR(to_date(match_date, 'DD-MM-YYYY'))END AS year
+FROM
+stg_deliveries d
+JOIN
+stg_matches m
+ON d.match_key = m.match_key AND fielders_involved is not null;
+
+ 
+
+-- Flatten all fielder names
+CREATE OR REPLACE TEMPORARY TABLE fielders AS (
+with base as (
+with cte as
+(SELECT *
+FROM fielders_list,
+LATERAL split_to_table(fielders_list.fielders_involved,',') AS f 
+)
+SELECT 
+CASE WHEN VALUE LIKE '%(sub)%' THEN SUBSTRING(VALUE,1,CHARINDEX('(',VALUE)-2)
+ELSE VALUE END AS fielder_name,
+bowl_team, 
+year 
+FROM cte)
+SELECT DISTINCT * FROM base
+);
+
+ 
+
+CREATE OR REPLACE TEMPORARY TABLE bat_bowl_team AS
+SELECT *,
+CASE WHEN sm.toss_decision = 'no toss' THEN sm.team_1
+WHEN sm.toss_decision LIKE '%bat%' THEN sm.toss_winner_code
+WHEN sm.toss_winner_code = sm.team_1 THEN team_2
+ELSE team_1 END AS team_A_code,
+CASE WHEN sm.toss_decision = 'no toss' THEN sm.team_2
+WHEN sm.toss_decision LIKE '%field%' THEN sm.toss_winner_code
+WHEN sm.toss_winner_code = sm.team_1 THEN team_2
+ELSE team_1 END AS team_B_code
+FROM stg_matches sm;
+
+ 
+
+-- Trim columns
+UPDATE bat_bowl_team
+SET team_A_code = trim(team_A_code);
+UPDATE bat_bowl_team
+SET team_B_code = trim(team_B_code);
+UPDATE dim_teams
+SET team_code = trim(team_code);
+UPDATE stg_deliveries
+SET playing_batsman_team = trim(playing_batsman_team);
+
+ 
+
+-- PLAYER_DIM
+INSERT INTO dim_players(player_name,team_code,year)
+SELECT * FROM batsman1
+UNION
+SELECT * FROM batsman2
+UNION
+SELECT * FROM bowler
+UNION
+SELECT * FROM fielders;
+
+ 
+
+-- MATCH_DIM
+INSERT INTO dim_matches(match_key,match_date,team_A_code,team_B_code,toss_decision,venue,win_mode,match_year)
+SELECT
+match_key,
+CASE WHEN match_date LIKE '%/%'
+THEN to_date(match_date, 'DD/MM/YYYY') 
+ELSE to_date(match_date, 'DD-MM-YYYY')END AS match_date,
+team_1,
+team_2,
+toss_decision,
+ground,
+win_mode,
+CASE WHEN match_date LIKE '%/%'
+THEN year(to_date(match_date, 'DD/MM/YYYY')) 
+ELSE year(to_date(match_date, 'DD-MM-YYYY')) END AS match_year
+FROM 
+stg_matches 
+ORDER BY 2 ASC;
+
+ 
+
+-- TEAM_DIM
+INSERT INTO dim_teams (team_code,team_name,city,owner,home_ground,captain,debut_year,end_year,is_current)
+SELECT
+short_code,
+Team,
+City,
+Owner,
+Home_ground,
+Captain,
+Debut,
+CASE WHEN Dissolved = 0 THEN NULL
+ELSE Dissolved-1 END AS end_year,
+1 as is_current
+FROM stg_teams;
+
+ 
+
+UPDATE dim_teams
+SET team_code = 'DCH' 
+WHERE team_code = 'DC';
+UPDATE dim_teams
+SET team_code = 'KXIP'
+WHERE team_code = 'KXP';
+UPDATE dim_teams
+SET team_code = 'GJ' 
+WHERE team_code = 'GL';
+INSERT INTO dim_teams (team_code,team_name,city,owner,home_ground,captain,debut_year,end_year,is_current)
+VALUES('DC','Deccan Chargers','Hyderabad',' Deccan Chronicle Holdings Ltd.','Rajiv Gandhi International Cricket Stadium','Kumar Sangakkara','2008','2012',1);
+UPDATE dim_teams
+SET team_code = trim(team_code);
+
+ 
+
+ 
+
+-------------------- STEP-5: Load data into match fact tables ----------------------------------
+
+ 
+
+INSERT INTO fact_teamA_match(match_key,team_code_sk,runs_scored,runs_conceded,
+wickets_lost,wickets_taken,sixes_hit,sixes_conceded,fours_hit,fours_conceded,catches_taken,
+runouts_made,stumpings_made,overs_played,overs_bowled,extras_conceded,margin,
+is_winner,is_toss_winner)
+SELECT 
+bb.match_key AS match_key,
+dt.team_sk AS team_code_sk,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_A_code THEN sd.runs_total ELSE 0 END)
+AS runs_scored,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_B_code THEN sd.runs_total ELSE 0 END)    
+AS runs_conceded,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_A_code AND sd.mode_of_dismissal is not null THEN 1 ELSE 0 END) AS wickets_lost,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_B_code AND sd.mode_of_dismissal is not null THEN 1 ELSE 0 END) AS wickets_taken,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_A_code AND runs_batsman = 6 THEN 1 ELSE 0 END)  AS sixes_hit,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_B_code AND runs_batsman = 6 THEN 1 ELSE 0 END)  AS sixes_conceded,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_A_code AND runs_batsman = 4 THEN 1 ELSE 0 END)  AS fours_hit,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_B_code AND runs_batsman = 4 THEN 1 ELSE 0 END)  AS fours_conceded,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_B_code AND sd.mode_of_dismissal = 'caught' THEN 1 ELSE 0 END) AS catches_taken,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_B_code AND sd.mode_of_dismissal = 'run out' THEN 1 ELSE 0 END) AS runouts_made,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_B_code AND sd.mode_of_dismissal = 'stumped' THEN 1 ELSE 0 END) AS  stumpings_made,
+MAX(CASE WHEN sd.playing_batsman_team = bb.team_A_code THEN sd.delivery ELSE 0 END) 
+AS overs_played,
+MAX(CASE WHEN sd.playing_batsman_team = bb.team_B_code THEN sd.delivery ELSE 0 END) 
+AS overs_bowled,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_B_code THEN runs_extras ELSE 0 END)    
+AS extras_conceded,
+CASE WHEN bb.winner = bb.team_A_code THEN bb.margin
+WHEN bb.winner = bb.team_B_code THEN bb.margin * -1
+ELSE 0 END AS  margin,
+CASE WHEN bb.winner = bb.team_A_code THEN 1
+WHEN bb.winner = bb.team_B_code THEN 0
+ELSE null END AS is_winner,
+CASE WHEN bb.toss_winner_code = bb.team_A_code THEN 1
+WHEN bb.toss_winner_code = bb.team_B_code THEN 0
+ELSE null END AS  is_toss_winner
+FROM bat_bowl_team  bb
+JOIN stg_deliveries sd
+ON bb.match_key = sd.match_key
+JOIN dim_teams dt
+ON dt.team_code = bb.team_A_code
+GROUP BY 1,2,17,18,19;
+
+ 
+
+-- MATCH_FACT Team B
+INSERT INTO fact_teamB_match(match_key,team_code_sk,runs_scored,runs_conceded,
+wickets_lost,wickets_taken,sixes_hit,sixes_conceded,fours_hit,fours_conceded,catches_taken,
+runouts_made,stumpings_made,overs_played,overs_bowled,extras_conceded,margin,
+is_winner,is_toss_winner)
+SELECT 
+bb.match_key AS match_key,
+dt.team_sk AS team_code_sk,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_B_code THEN sd.runs_total ELSE 0 END)
+AS runs_scored,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_A_code THEN sd.runs_total ELSE 0 END)    
+AS runs_conceded,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_B_code AND sd.mode_of_dismissal is not null THEN 1 ELSE 0 END) AS wickets_lost,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_A_code AND sd.mode_of_dismissal is not null THEN 1 ELSE 0 END) AS wickets_taken,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_B_code AND runs_batsman = 6 THEN 1 ELSE 0 END)  AS sixes_hit,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_A_code AND runs_batsman = 6 THEN 1 ELSE 0 END)  AS sixes_conceded,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_B_code AND runs_batsman = 4 THEN 1 ELSE 0 END)  AS fours_hit,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_A_code AND runs_batsman = 4 THEN 1 ELSE 0 END)  AS fours_conceded,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_A_code AND sd.mode_of_dismissal = 'caught' THEN 1 ELSE 0 END) AS catches_taken,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_A_code AND sd.mode_of_dismissal = 'run out' THEN 1 ELSE 0 END) AS runouts_made,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_A_code AND sd.mode_of_dismissal = 'stumped' THEN 1 ELSE 0 END) AS  stumpings_made,
+MAX(CASE WHEN sd.playing_batsman_team = bb.team_B_code THEN sd.delivery ELSE 0 END) 
+AS overs_played,
+MAX(CASE WHEN sd.playing_batsman_team = bb.team_A_code THEN sd.delivery ELSE 0 END) 
+AS overs_bowled,
+SUM(CASE WHEN sd.playing_batsman_team = bb.team_A_code THEN runs_extras ELSE 0 END)    
+AS extras_conceded,
+CASE WHEN bb.winner = bb.team_B_code THEN bb.margin
+WHEN bb.winner = bb.team_A_code THEN bb.margin * -1
+ELSE 0 END AS  margin,
+CASE WHEN bb.winner = bb.team_B_code THEN 1
+WHEN bb.winner = bb.team_A_code THEN 0
+ELSE null END AS is_winner,
+CASE WHEN bb.toss_winner_code = bb.team_B_code THEN 1
+WHEN bb.toss_winner_code = bb.team_A_code THEN 0
+ELSE null END AS  is_toss_winner
+FROM bat_bowl_team  bb
+JOIN stg_deliveries sd
+ON bb.match_key = sd.match_key
+JOIN dim_teams dt
+ON dt.team_code = bb.team_B_code
+GROUP BY 1,2,17,18,19;
+
+ 
+
+-------------------- STEP-6: Load data into player fact table ----------------------------------
+
+ 
+
+-- Table for connecting fact_players with dim tables.
+CREATE OR REPLACE TEMPORARY TABLE player_match AS
+select player_sk,player_name,team_code,pd.year,match_key
+from dim_players pd
+JOIN dim_matches dm
+ON dm.match_year = pd.year AND (trim(pd.team_code) = trim(dm.team_A_code) OR trim(pd.team_code) = trim(dm.team_B_code));
+
+ 
+
+-- Aggregate batsman stats
+CREATE OR REPLACE TEMPORARY TABLE bats_agg AS
+SELECT
+player_sk,
+player_name,
+team_code,
+year,
+pm.match_key,
+SUM(sd.runs_batsman) as runs_scored,
+SUM(CASE WHEN sd.runs_batsman = 4 THEN 1 ELSE 0 END) as fours_hit,
+SUM(CASE WHEN sd.runs_batsman = 6 THEN 1 ELSE 0 END) as sixes_hit,
+SUM(CASE WHEN sd.extras_type = 'WIDES' THEN 0 ELSE 1 END)as balls_faced,
+CASE WHEN SUM(CASE WHEN sd.extras_type = 'WIDES' THEN 0 ELSE 1 END) !=0 THEN SUM(sd.runs_batsman)*100/SUM(CASE WHEN sd.extras_type = 'WIDES' THEN 0 ELSE 1 END)
+ELSE 0 END as SR_bats,
+SUM(CASE WHEN sd.runs_batsman = 0 THEN 1 ELSE 0 END) AS dotballs_faced
+FROM player_match pm
+JOIN stg_deliveries sd
+ON sd.match_key = pm.match_key AND sd.batsman = pm.player_name
+GROUP BY 1,2,3,4,5;
+
+ 
+
+-- Aggregate bowler stats
+CREATE OR REPLACE TEMPORARY TABLE bowl_agg AS
+SELECT
+player_sk,
+player_name,
+team_code,
+year,
+pm.match_key,
+SUM(CASE WHEN trim(sd.mode_of_dismissal) = 'caught' OR trim(sd.mode_of_dismissal) = 'stumped' THEN 1 ELSE 0 END) AS wickets_taken,
+SUM(sd.runs_total) AS runs_conceded,
+SUM(CASE WHEN sd.runs_batsman = 6 THEN 1 ELSE 0 END) AS sixes_conceded, 
+SUM(CASE WHEN sd.runs_batsman = 4 THEN 1 ELSE 0 END) AS fours_conceded,
+SUM(CASE WHEN sd.extras_type = 'WIDES' or sd.extras_type = 'NOBALLS' THEN 0 ELSE 1 END) as balls_bowled,
+CASE WHEN SUM(CASE WHEN sd.extras_type = 'WIDES' or sd.extras_type = 'NOBALLS' THEN 0 ELSE 1 END) = 0 THEN 0
+ELSE SUM(sd.runs_total)/(floor((SUM(CASE WHEN sd.extras_type = 'WIDES' or sd.extras_type = 'NOBALLS' THEN 0 ELSE 1 END))/6) + ((SUM(CASE WHEN sd.extras_type = 'WIDES' or sd.extras_type = 'NOBALLS' THEN 0 ELSE 1 END))%6)/6) END as Econ_bowl,
+SUM(CASE WHEN trim(sd.extras_type) = 'WIDES' OR trim(sd.extras_type) = 'NOBALLS' THEN sd.runs_extras ELSE 0 END) AS extras_bowl,
+SUM(CASE WHEN sd.runs_total = 0 THEN 1 ELSE 0 END) AS dotballs_bowled
+FROM player_match pm
+JOIN stg_deliveries sd 
+ON sd.match_key = pm.match_key AND sd.bowler = pm.player_name
+GROUP BY 1,2,3,4,5;
+
+ 
+
+-- Flatten for mode of dismissal
+CREATE OR REPLACE TEMPORARY TABLE outs AS (
+WITH base as (
+WITH cte as (
+SELECT match_key, fielders_involved, mode_of_dismissal from stg_deliveries
+where mode_of_dismissal IS NOT NULL
+)
+SELECT * FROM cte,
+LATERAL split_to_table(cte.fielders_involved,',') AS f
+)
+SELECT match_key,
+CASE WHEN VALUE LIKE '%(sub)%' THEN SUBSTRING(VALUE,1,CHARINDEX('(',VALUE)-2)
+ELSE VALUE END AS fielder_name, mode_of_dismissal FROM base
+);
+
+ 
+
+-- Aggregate fielder stats
+CREATE OR REPLACE TEMPORARY TABLE fielder_agg AS
+SELECT
+player_sk,
+player_name,
+team_code,
+year,
+pm.match_key,
+SUM(CASE WHEN trim(mode_of_dismissal) = 'caught' THEN 1 ELSE 0 END) AS catches_taken,
+SUM(CASE WHEN trim(mode_of_dismissal) = 'stumped' THEN 1 ELSE 0 END) AS stumpings,
+SUM(CASE WHEN trim(mode_of_dismissal) = 'run out' THEN 1 ELSE 0 END) AS runouts_made 
+FROM player_match pm
+JOIN outs o
+ON o.match_key = pm.match_key AND o.fielder_name = pm.player_name
+GROUP BY 1,2,3,4,5;
+
+ 
+
+-- PLAYER FACT 
+INSERT INTO fact_players(player_key,match_key,runs_scored,runs_conceded,wickets_taken,sixes_hit,fours_hit,
+sixes_conceded,fours_conceded,balls_faced,balls_bowled,SR_bats,Econ_bowl,extras_bowl,
+catches_taken,stumpings,runouts_made,dotballs_faced,dotballs_bowled)
+SELECT 
+pm.player_sk as player_key, 
+pm.match_key as match_key,
+btsa.runs_scored as runs_scored,
+bwla.runs_conceded as runs_conceded,
+bwla.wickets_taken as wickets_taken,
+btsa.sixes_hit as sixes_hit,
+btsa.fours_hit as fours_hit,
+bwla.sixes_conceded as sixes_conceded,
+bwla.fours_conceded as fours_conceded,
+btsa.balls_faced as balls_faced,
+bwla.balls_bowled as balls_bowled,
+btsa.SR_bats as SR_bats,
+bwla.Econ_bowl as Econ_bowl,
+bwla.extras_bowl as extras_bowl,
+fld.catches_taken as catches_taken,
+fld.stumpings as stumpings,
+fld.runouts_made as runouts_made,
+btsa.dotballs_faced as dotballs_faced,
+bwla.dotballs_bowled as dotballs_bowled
+FROM player_match pm
+LEFT JOIN bowl_agg bwla
+ON pm.match_key = bwla.match_key AND pm.player_sk = bwla.player_sk
+LEFT JOIN bats_agg btsa
+ON pm.match_key = btsa.match_key AND pm.player_sk = btsa.player_sk
+LEFT JOIN fielder_agg fld
+ON pm.match_key = fld.match_key AND pm.player_sk = fld.player_sk;
+
+ 
+
+select COUNT(*) from dim_players --1362

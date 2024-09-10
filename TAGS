@@ -1,0 +1,40 @@
+USE ROLE useradmin;
+CREATE ROLE tag_admin_star;
+
+ 
+
+USE ROLE ACCOUNTADMIN;
+GRANT CREATE TAG ON SCHEMA DW_IPL.IPL_ETL TO ROLE tag_admin_star;
+GRANT APPLY TAG ON ACCOUNT TO ROLE tag_admin_star;
+GRANT ROLE tag_admin_star TO USER NIKHILKUMAR;
+
+ 
+
+GRANT USAGE ON DATABASE DW_IPL to role tag_admin_star;
+GRANT USAGE ON SCHEMA DW_IPL.IPL_ETL to role tag_admin_star;
+GRANT SELECT ON TABLE DW_IPL.IPL_ETL.dim_teams to role tag_admin_star;
+GRANT SELECT ON TABLE DW_IPL.IPL_ETL.dim_players to role tag_admin_star;
+
+ 
+
+USE ROLE tag_admin_star;
+USE SCHEMA DW_IPL.IPL_ETL;
+CREATE TAG PII;
+
+ 
+
+ALTER TABLE dim_players
+MODIFY COLUMN player_name
+SET TAG PII = 'Sensitive information';
+
+ 
+
+ALTER TABLE dim_teams
+MODIFY COLUMN owner
+SET TAG PII = 'Sensitive information';
+
+ 
+
+ALTER TABLE dim_teams
+MODIFY COLUMN captain
+SET TAG PII = 'Sensitive information';

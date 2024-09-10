@@ -1,0 +1,101 @@
+-- Points_table for teams for every season
+CREATE OR REPLACE TABLE POINTS_TABLE AS
+WITH points_a AS (
+        SELECT
+        dm_a.match_year AS year,
+        dt_a.team_code AS team,
+        COUNT(*) AS num_matches_played,
+        SUM(CASE WHEN ftm_a.is_winner = 1 THEN 1 ELSE 0 END) AS num_matches_won,
+         SUM(CASE WHEN ftm_a.is_winner = 0 THEN 1 ELSE 0 END) AS num_matches_lost,
+        SUM(CASE WHEN ftm_a.is_winner is NULL THEN 1 ELSE 0 END) AS num_matches_draw,
+        SUM(ftm_a.runs_scored) as runs_scored,
+        SUM(ftm_a.runs_conceded) as runs_conceded,
+        SUM(ftm_a.overs_played) as overs_played,
+        SUM(ftm_a.overs_bowled) as overs_bowled
+
+    FROM
+        dim_teams dt_a
+    JOIN
+        fact_teama_match ftm_a ON dt_a.team_sk = ftm_a.team_code_sk
+    JOIN
+        dim_matches dm_a ON dm_a.match_key = ftm_a.match_key
+    GROUP BY
+        dm_a.match_year,
+        dt_a.team_code
+),
+points_b AS (
+      SELECT
+        dm_b.match_year AS year,
+        dt_b.team_code AS team,
+        COUNT(*) AS num_matches_played,
+        SUM(CASE WHEN ftm_b.is_winner = 0 THEN 1 ELSE 0 END) AS num_matches_won,
+        SUM(CASE WHEN ftm_b.is_winner = 0 THEN 1 ELSE 0 END) AS num_matches_lost,
+        SUM(CASE WHEN ftm_b.is_winner is NULL THEN 1 ELSE 0 END) AS num_matches_draw,
+        SUM(ftm_b.runs_scored) as runs_scored,
+        SUM(ftm_b.runs_conceded) as runs_conceded,
+        SUM(ftm_b.overs_played) as overs_played,
+        SUM(ftm_b.overs_bowled) as overs_bowled
+    FROM
+        dim_teams dt_b
+    JOIN
+        fact_teamb_match ftm_b ON dt_b.team_sk = ftm_b.team_code_sk
+    JOIN
+        dim_matches dm_b ON dm_b.match_key = ftm_b.match_key
+    GROUP BY
+        dm_b.match_year,
+        dt_b.team_code
+)
+select 
+year,
+team,
+num_matches_played,
+num_matches_won,
+num_matches_lost,
+num_matches_draw,
+points ,
+CASE WHEN overs_played = 0 OR overs_bowled = 0 THEN 0 
+ELSE
+(runs_scored/((overs_played-floor(overs_played))*10/6 + floor(overs_played))) -
+(runs_conceded/((overs_bowled-floor(overs_bowled))*10/6 + floor(overs_bowled)))
+END AS NRR
+from(
+SELECT 
+    A.year,
+    A.team,
+    SUM(A.num_matches_played + B.num_matches_played) AS num_matches_played,
+    SUM(A.num_matches_won + B.num_matches_won) AS num_matches_won,
+     SUM(A.num_matches_lost + B.num_matches_lost) AS num_matches_lost,
+     SUM(A.num_matches_draw + B.num_matches_draw) AS num_matches_draw,
+     SUM(A.runs_scored + B.runs_scored) AS runs_scored ,
+     SUM(A.runs_conceded + B.runs_conceded) AS runs_conceded,
+     SUM(A.overs_played + B.overs_played) AS overs_played,
+     SUM(A.overs_bowled + B.overs_bowled) AS overs_bowled,
+     (SUM(A.num_matches_won + B.num_matches_won)*2+SUM(A.num_matches_draw + B.num_matches_draw)*1) as points
+FROM 
+    points_a A
+JOIN 
+    points_b B ON A.year = B.year AND A.team = B.team
+GROUP BY
+    A.year,
+    A.team
+)
+ORDER BY
+year,team
+
+select * from points_table order by year
+====================================
+--MASKING POLICY
+
+create or replace row access policy rls_team_policy as (team STRING) returns boolean ->
+'ACCOUNTADMIN' = current_user()
+or exists (
+select 1 from team_mapping
+where team_manager_role = current_role()
+and team_code = trim(team)
+);
+
+
+alter table points_table drop row access policy rls_team_policy ;
+
+use role CSK_MANAGER;
+select * from points_table

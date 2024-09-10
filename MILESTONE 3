@@ -1,0 +1,70 @@
+-- Problem - 1 :
+-- Write a function to accept a team code and match date and return the run rate
+
+ 
+
+CREATE OR REPLACE FUNCTION get_run_rate_A(team_code STRING, match_date DATE)
+RETURNS NUMERIC
+LANGUAGE SQL
+AS
+'
+SELECT 
+CASE WHEN overs_played = 0 OR overs_bowled = 0 THEN 0
+ELSE
+(runs_scored/((overs_played-floor(overs_played))*10/6 + floor(overs_played))) -
+(runs_conceded/((overs_bowled-floor(overs_bowled))*10/6 + floor(overs_bowled)))
+END AS NRR
+from fact_teamA_match fA
+JOIN dim_matches dm ON dm.match_key = fA.match_key AND dm.match_date = match_date
+JOIN dim_teams dt ON dt.team_sk = fA.team_code_sk AND dt.team_code = team_code
+';
+
+ 
+
+CREATE OR REPLACE FUNCTION get_run_rate_B(team_code STRING, match_date DATE)
+RETURNS NUMERIC
+LANGUAGE SQL
+AS
+'
+SELECT 
+CASE WHEN overs_played = 0 OR overs_bowled = 0 THEN 0 
+ELSE
+(runs_scored/((overs_played-floor(overs_played))*10/6 + floor(overs_played))) -
+(runs_conceded/((overs_bowled-floor(overs_bowled))*10/6 + floor(overs_bowled)))
+END AS NRR
+from fact_teamB_match fB
+JOIN dim_matches dm ON dm.match_key = fB.match_key AND dm.match_date = match_date
+JOIN dim_teams dt ON dt.team_sk = fB.team_code_sk AND dt.team_code = team_code
+';
+
+ 
+
+CREATE OR REPLACE FUNCTION is_batting_first(team_code STRING, match_date DATE)
+RETURNS BOOLEAN
+LANGUAGE SQL
+AS
+'SELECT
+CASE WHEN COUNT(*) > 0 THEN TRUE
+ELSE FALSE END 
+FROM fact_teamA_match fA
+JOIN dim_matches dm ON dm.match_key = fA.match_key AND dm.match_date = match_date
+JOIN dim_teams dt ON dt.team_sk = fA.team_code_sk AND dt.team_code = team_code';
+
+ 
+
+CREATE OR REPLACE FUNCTION get_run_rate(team_code STRING, match_date DATE)
+RETURNS NUMERIC
+LANGUAGE SQL
+AS
+'SELECT 
+CASE WHEN is_batting_first(team_code,match_date) = TRUE THEN 
+get_run_rate_A(team_code,match_date)
+ELSE get_run_rate_B(team_code,match_date) END AS NRR';
+
+ 
+
+SELECT get_run_rate('DC','2010-04-08');
+SELECT get_run_rate('RCB','2010-04-08');
+ 
+
+SELECT * FROM fact_teamb_match WHERE match_key = '20100408RCBDC'

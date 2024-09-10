@@ -1,0 +1,144 @@
+-- All table creations under a procedure to faciliate next bulk loading
+CREATE OR REPLACE PROCEDURE create_star_schema_tables()
+RETURNS STRING
+LANGUAGE SQL
+AS
+BEGIN
+
+
+-------------- Create Dimension tables --------------------------
+
+ 
+-- dim_matches
+CREATE OR REPLACE TABLE dim_matches (
+    match_key STRING PRIMARY KEY,
+    match_date DATE NOT NULL,
+    team_A_code STRING NOT NULL,
+    team_B_code STRING NOT NULL,
+    toss_decision STRING,
+    venue STRING NOT NULL,
+    win_mode STRING,
+    match_year INTEGER
+);
+
+ 
+
+-- dim_teams 
+CREATE OR REPLACE TABLE dim_teams (
+    team_sk INTEGER AUTOINCREMENT PRIMARY KEY, 
+    team_code STRING,
+    team_name STRING NOT NULL,
+    city STRING	NOT NULL,
+    owner STRING NOT NULL,
+    home_ground	STRING NOT NULL,
+    captain	STRING NOT NULL,
+    debut_year INTEGER NOT NULL,
+    end_year INTEGER,
+    is_current BOOLEAN NOT NULL
+);
+
+ 
+
+-- dim_players
+CREATE OR REPLACE TABLE dim_players (
+    player_sk INTEGER AUTOINCREMENT PRIMARY KEY,
+    player_name STRING NOT NULL,
+    year INTEGER NOT NULL,
+    team_code STRING
+);
+
+ 
+
+---------------- Create Fact Tables --------------------
+
+ 
+
+-- fact_teamA_match 
+CREATE OR REPLACE TABLE fact_teamA_match (
+    match_key STRING PRIMARY KEY,
+    team_code_sk INTEGER,
+    runs_scored INTEGER,
+    runs_conceded INTEGER,
+    wickets_lost INTEGER,
+    wickets_taken INTEGER,
+    sixes_hit INTEGER,
+    sixes_conceded INTEGER,
+    fours_hit INTEGER,
+    fours_conceded INTEGER,
+    catches_taken INTEGER,
+    runouts_made INTEGER,
+    stumpings_made INTEGER,
+    overs_played INTEGER,
+    overs_bowled INTEGER,
+    extras_conceded INTEGER,
+    margin INTEGER,
+    is_winner INTEGER,
+    is_toss_winner INTEGER,
+
+ 
+
+    FOREIGN KEY (match_key) REFERENCES dim_matches (match_key),
+    FOREIGN KEY (team_code_sk) REFERENCES dim_teams (team_sk)
+);
+
+ 
+
+-- fact_teamA_match
+CREATE OR REPLACE TABLE fact_teamB_match (
+    match_key STRING PRIMARY KEY,
+    team_code_sk INTEGER,
+    runs_scored INTEGER,
+    runs_conceded INTEGER,
+    wickets_lost INTEGER,
+    wickets_taken INTEGER,
+    sixes_hit INTEGER,
+    sixes_conceded INTEGER,
+    fours_hit INTEGER,
+    fours_conceded INTEGER,
+    catches_taken INTEGER,
+    runouts_made INTEGER,
+    stumpings_made INTEGER,
+    overs_played INTEGER,
+    overs_bowled INTEGER,
+    extras_conceded INTEGER,
+    margin INTEGER,
+    is_winner INTEGER,
+    is_toss_winner INTEGER,
+
+ 
+
+    FOREIGN KEY (match_key) REFERENCES dim_matches (match_key),
+    FOREIGN KEY (team_code_sk) REFERENCES dim_teams (team_sk)
+);
+
+ 
+
+ 
+
+-- fact_players
+CREATE OR REPLACE TABLE fact_players (
+    player_key INTEGER PRIMARY KEY,
+    match_key STRING,
+    runs_scored INTEGER,
+    runs_conceded INTEGER,
+    wickets_taken INTEGER,
+    sixes_hit INTEGER,
+    fours_hit INTEGER,
+    sixes_conceded INTEGER,
+    fours_conceded INTEGER,
+    balls_faced INTEGER,
+    balls_bowled INTEGER,
+    SR_bats INTEGER,
+    econ_bowl FLOAT,
+    extras_bowl FLOAT,
+    catches_taken INTEGER,
+    stumpings INTEGER,
+    runouts_made INTEGER,
+    dotballs_faced INTEGER,
+    dotballs_bowled INTEGER,
+ 
+    FOREIGN KEY (match_key) REFERENCES dim_matches (match_key),
+    FOREIGN KEY (player_key) REFERENCES dim_players (player_sk)
+);
+RETURN('DONE');
+END;

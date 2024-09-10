@@ -1,1 +1,1 @@
-# Snowflake_Capstone
+# Snowflake-Capstone
